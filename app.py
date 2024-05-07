@@ -1,132 +1,81 @@
-
-
-
-
-# Import the dependencies.
+# Import the dependencies
 from flask import Flask, jsonify
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
+from sqlalchemy.ext.automap import automap_base
+import datetime as dt
+import numpy as np  # Ensure numpy is imported for data processing
 
+# Flask Setup
 app = Flask(__name__)
-
-# Create an engine to the SQLite database
-engine = create_engine('sqlite:///hawaii.sqlite')
-
-# Define routes
-@app.route("/")
-def home():
-    """List all available api routes."""
-    return (
-        f"Available Routes:<br/>"
-        f"/api/v1.0/precipitation<br/>"
-        f"/api/v1.0/stations<br/>"
-    )
-
-@app.route("/api/v1.0/precipitation")
-def precipitation():
-    session = Session(engine)
-    most_recent_date = session.query(func.max(Measurement.date)).scalar()
-    last_date = datetime.strptime(most_recent_date, '%Y-%m-%d')
-    start_date = last_date - timedelta(days=365)
-
-    results = session.query(Measurement.date, Measurement.prcp).\
-        filter(Measurement.date >= start_date).all()
-    session.close()
-
-    # Convert the query results to a dictionary using date as the key and prcp as the value
-    precipitation_data = {date: prcp for date, prcp in results}
-    return jsonify(precipitation_data)
-
-@app.route("/api/v1.0/stations")
-def stations():
-    session = Session(engine)
-    results = session.query(Station.station).all()
-    session.close()
-
-    # Convert list of tuples into normal list
-    stations = list(np.ravel(results))
-    return jsonify(stations)
-
-if __name__ == '__main__':
-    app.run(debug=True)
-
-from flask import Flask, jsonify
-from sqlalchemy import create_engine, func
-from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
-
-app = Flask(__name__)
-engine = create_engine('sqlite:///hawaii.sqlite')
-
-@app.route("/api/v1.0/tobs")
-def temperature_observations():
-    session = Session(engine)
-    most_recent_date = session.query(func.max(Measurement.date)).scalar()
-    last_date = datetime.strptime(most_recent_date, '%Y-%m-%d')
-    start_date = last_date - timedelta(days=365)
-
-    # Most active station from previous queries
-    most_active_station_id = 'USC00519281'  # Example station ID
-
-    results = session.query(Measurement.date, Measurement.tobs).\
-        filter(Measurement.station == most_active_station_id).\
-        filter(Measurement.date >= start_date).\
-        order_by(Measurement.date).all()
-    session.close()
-
-    temperatures = {date: tobs for date, tobs in results}
-    return jsonify(temperatures)
-
-@app.route("/api/v1.0/<start>", defaults={'end': None})
-@app.route("/api/v1.0/<start>/<end>")
-def stats(start, end):
-    session = Session(engine)
-    if end:
-        results = session.query(func.min(Measurement.tobs), func.avg(Measurement.tobs), func.max(Measurement.tobs)).\
-            filter(Measurement.date >= start).\
-            filter(Measurement.date <= end).all()
-    else:
-        results = session.query(func.min(Measurement.tobs), func.avg(Measurement.tobs), func.max(Measurement.tobs)).\
-            filter(Measurement.date >= start).all()
-    session.close()
-
-    temps = list(np.ravel(results))
-    return jsonify({
-        "TMIN": temps[0],
-        "TAVG": temps[1],
-        "TMAX": temps[2]
-    })
-
-if __name__ == '__main__':
-    app.run(debug=True)
-
-
-
 
 #################################################
 # Database Setup
 #################################################
+engine = create_engine("sqlite:///hawaii.sqlite")  
+Base = automap_base()
+Base.prepare(engine, reflect=True)
 
+# References saved  to each table
+Measurement = Base.classes.measurement
+Station = Base.classes.station
 
-# reflect an existing database into a new model
-
-# reflect the tables
-
-
-# Save references to each table
-
-
-# Create our session (link) from Python to the DB
-
-
-#################################################
-# Flask Setup
-#################################################
-
-
-
+# Creates our session (link) from Python to the DB
+session = Session(engine)
 
 #################################################
 # Flask Routes
 #################################################
+@app.route("/")
+def welcome():
+    """List all available API routes."""
+    return (
+        f"Available Routes:<br/>"
+        f"/api/v1.0/precipitation<br/>"
+        f"/api/v1.0/stations<br/>"
+        f"/api/v1.0/tobs<br/>"
+        f"/api/v1.0/<start><br/>"
+        f"/api/v1.0/<start>/<end>"
+    )
+
+@app.route("/api/v1.0/precipitation")
+def precipitation():
+    """Return the JSON list of precipitation data from the dataset."""
+    results = session.query(Measurement.date, Measurement.prcp).all()
+    precip = {date: prcp for date, prcp in results}
+    return jsonify(precip)
+
+@app.route("/api/v1.0/stations")
+def stations():
+    """Return a JSON list of stations from the dataset."""
+    results = session.query(Station.station).all()
+    stations = [station[0] for station in results]
+    return jsonify(stations)
+
+@app.route("/api/v1.0/tobs")
+def tobs():
+    """Return a JSON list of temperature observations (TOBS) for the previous year."""
+    latest_date = session.query(Measurement.date).order_by(Measurement.date.desc()).first()
+    latest_date = dt.datetime.strptime(latest_date[0], "%Y-%m-%d")
+    query_date = latest_date - dt.timedelta(days=365)
+
+    results = session.query(Measurement.date, Measurement.tobs).\
+        filter(Measurement.date >= query_date).\
+        filter(Measurement.station == 'USC00519281').all()  #Most active station ID, (determined in climate_starter)
+
+    temps = {date: tobs for date, tobs in results}
+    return jsonify(temps)
+
+@app.route("/api/v1.0/<start>")
+@app.route("/api/v1.0/<start>/<end>")
+def stats(start=None, end=None):
+    """Return JSON list of the minimum temperature, the average temperature, and the maximum temperature for a given start or start-end range."""
+    query = session.query(func.min(Measurement.tobs), func.avg(Measurement.tobs), func.max(Measurement.tobs))
+    if end:
+        query = query.filter(Measurement.date >= start, Measurement.date <= end)
+    else:
+        query = query.filter(Measurement.date >= start)
+    results = query.all()
+    temps = list
+
+
